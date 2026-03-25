@@ -1,0 +1,26 @@
+<routes>
+    <vType id="standard_car" accel="0.8" decel="4.5" length="5.0" maxSpeed="15.0" guiShape="passenger" color="yellow"/>
+    
+    <vType id="ambulance" accel="1.5" decel="5.0" length="6.5" maxSpeed="25.0" vClass="emergency" guiShape="emergency" color="red"/>
+
+    <flow id="top_straight" type="standard_car" begin="0" end="3600" probability="0.05" from="E17" to="-E19"/>
+    <flow id="top_right"    type="standard_car" begin="0" end="3600" probability="0.02" from="E17" to="-E16"/>
+    <flow id="top_left"     type="standard_car" begin="0" end="3600" probability="0.02" from="E17" to="-E18"/>
+
+    <flow id="bot_straight" type="standard_car" begin="0" end="3600" probability="0.05" from="E19" to="-E17"/>
+    <flow id="bot_right"    type="standard_car" begin="0" end="3600" probability="0.02" from="E19" to="-E18"/>
+    <flow id="bot_left"     type="standard_car" begin="0" end="3600" probability="0.02" from="E19" to="-E16"/>
+
+    <flow id="left_straight" type="standard_car" begin="0" end="3600" probability="0.05" from="E16" to="-E18"/>
+    <flow id="left_right"    type="standard_car" begin="0" end="3600" probability="0.02" from="E16" to="-E19"/>
+    <flow id="left_left"     type="standard_car" begin="0" end="3600" probability="0.02" from="E16" to="-E17"/>
+
+    <flow id="right_straight" type="standard_car" begin="0" end="3600" probability="0.05" from="E18" to="-E16"/>
+    <flow id="right_right"    type="standard_car" begin="0" end="3600" probability="0.02" from="E18" to="-E17"/>
+    <flow id="right_left"     type="standard_car" begin="0" end="3600" probability="0.02" from="E18" to="-E19"/>
+
+    <flow id="amb_top" type="ambulance" begin="0" end="3600" probability="0.005" from="E17" to="-E19"/>
+    
+    <flow id="amb_left" type="ambulance" begin="0" end="3600" probability="0.005" from="E16" to="-E18"/>
+
+</routes>

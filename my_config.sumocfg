@@ -1,0 +1,12 @@
+<configuration>
+    <input>
+        <net-file value="crossroads.net.xml"/>
+        
+        <route-files value="my_traffic.rou.xml"/>
+    </input>
+
+    <time>
+        <begin value="0"/>
+        <end value="3600"/>
+    </time>
+</configuration>
