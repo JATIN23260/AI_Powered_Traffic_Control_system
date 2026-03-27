@@ -93,13 +93,13 @@ function populateDashboard(data) {
     document.getElementById('b-wait-all').textContent       = b.avg_wait_all.toFixed(1);
     document.getElementById('b-wait-ambulance').textContent  = b.avg_wait_ambulance.toFixed(1);
 
-    // Calculate reductions: (A - B) / A * 100
-    // Positive = B is better (lower wait)
-    const overallReduction   = a.avg_wait_all > 0
-        ? ((a.avg_wait_all - b.avg_wait_all) / a.avg_wait_all * 100)
+    // Calculate reductions: positive = AI (A) is better than Baseline (B)
+    // (B - A) / B * 100 → positive means A has lower wait than B → AI wins
+    const overallReduction   = b.avg_wait_all > 0
+        ? ((b.avg_wait_all - a.avg_wait_all) / b.avg_wait_all * 100)
         : 0;
-    const ambulanceReduction = a.avg_wait_ambulance > 0
-        ? ((a.avg_wait_ambulance - b.avg_wait_ambulance) / a.avg_wait_ambulance * 100)
+    const ambulanceReduction = b.avg_wait_ambulance > 0
+        ? ((b.avg_wait_ambulance - a.avg_wait_ambulance) / b.avg_wait_ambulance * 100)
         : 0;
 
     setReduction('overall-reduction',   overallReduction);
@@ -112,17 +112,16 @@ function populateDashboard(data) {
 
 function setReduction(id, pct) {
     const el = document.getElementById(id);
-    const sign   = pct >= 0 ? '' : '+';
     const absVal = Math.abs(pct).toFixed(1);
-    el.textContent = sign + absVal + '%';
+    // Positive = AI is better (improvement), Negative = AI is worse (regression)
+    el.textContent = (pct >= 0 ? '' : '-') + absVal + '%';
 
-    // Color: positive reduction = green, negative = red, zero = neutral
     el.classList.remove('positive', 'negative', 'neutral');
     if (Math.abs(pct) < 0.5) {
         el.classList.add('neutral');
     } else if (pct > 0) {
-        el.classList.add('positive');
+        el.classList.add('positive');   // green: AI reduced wait time
     } else {
-        el.classList.add('negative');
+        el.classList.add('negative');   // red: AI increased wait time
     }
 }

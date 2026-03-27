@@ -110,6 +110,7 @@ def run_simulation():
         "--tripinfo", tripinfo_a,
         "--window-title", "Instance A - AI Traffic Control",
         "--summary-json", summary_a,
+        "--use-ai",
     ]
 
     cmd_b = [
@@ -117,8 +118,9 @@ def run_simulation():
         "--video", video_path,
         "--port", str(PORT_B),
         "--tripinfo", tripinfo_b,
-        "--window-title", "Instance B - Baseline",
+        "--window-title", "Instance B - Baseline (Fixed Timer)",
         "--summary-json", summary_b,
+        "--fixed-tl",
     ]
 
     # 4. Launch both instances simultaneously

@@ -1,6 +1,7 @@
 models/
 videos/
 uploads/
+__pycache__/
 summary_A.json
 summary_B.json
 tripinfo_A.xml

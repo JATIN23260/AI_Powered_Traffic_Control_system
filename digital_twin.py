@@ -162,7 +162,7 @@ class HybridTwinController:
 
     def __init__(self, cfg_path: str, port: int = TRACI_PORT,
                  fps: float = 30.0, skip_frames: int = SKIP_FRAMES,
-                 tripinfo_output: str = ""):
+                 tripinfo_output: str = "", skip_tl_sync: bool = False):
         import traci
         self._traci = traci
 
@@ -203,8 +203,11 @@ class HybridTwinController:
         self._wait_frames: dict[int, int] = {}   # track_id → consecutive stopped frames
         self._zone_by_tid: dict[int, str] = {}   # track_id → current zone
 
+        self._skip_tl_sync = skip_tl_sync
+
         print(f"[✓] SUMO started ({binary}) on port {port}")
-        print("[✓] Hybrid mode: Frame-0 snapshot + edge tripwires + TL sync")
+        print("[✓] Hybrid mode: Frame-0 snapshot + edge tripwires" +
+              (" + AI TL control" if skip_tl_sync else " + TL sync"))
 
     @staticmethod
     def _binary_exists(name: str) -> bool:
@@ -322,15 +325,18 @@ class HybridTwinController:
             else:
                 self._wait_frames[tid] = 0
 
-        # Rule 2 — sync SUMO traffic light
-        self._sync_traffic_light(arm_speeds)
+        # Rule 2 - sync SUMO traffic light (skip when AI controller handles TL)
+        if not self._skip_tl_sync:
+            self._sync_traffic_light(arm_speeds)
 
         # Rule 4 — remove SUMO twins for tracks that left the video
         gone = set(self._active.keys()) - seen_ids
         for tid in gone:
             vid = self._active.pop(tid)
             try:
-                traci.vehicle.remove(vid)
+                # Only remove if vehicle still exists in SUMO
+                if vid in traci.vehicle.getIDList():
+                    traci.vehicle.remove(vid)
                 print(f"  [-] Removed twin_{tid}")
             except Exception:
                 pass
@@ -433,18 +439,26 @@ def main():
     parser.add_argument("--summary-json", default="", help="Path to write summary JSON at exit")
     parser.add_argument("--no-sumo",      action="store_true", help="Video-only mode (no SUMO)")
     parser.add_argument("--calibrate",    action="store_true", help="Homography calibration mode")
+    parser.add_argument("--use-ai",       action="store_true", help="Use MAPPO AI for TL control")
+    parser.add_argument("--ai-checkpoint", default="models/mappo_checkpoint.pt", help="AI model checkpoint")
+    parser.add_argument("--fixed-tl",     action="store_true", help="Use SUMO default fixed-timer TL (baseline)")
     args = parser.parse_args()
 
     if args.calibrate:
         run_calibration(args.video)
         return
 
-    video_path   = args.video
-    traci_port   = args.port
-    tripinfo_out = args.tripinfo
-    win_title    = args.window_title
-    summary_path = args.summary_json
-    no_sumo      = args.no_sumo
+    video_path    = args.video
+    traci_port    = args.port
+    tripinfo_out  = args.tripinfo
+    win_title     = args.window_title
+    summary_path  = args.summary_json
+    no_sumo       = args.no_sumo
+    use_ai        = args.use_ai
+    ai_checkpoint = args.ai_checkpoint
+    fixed_tl      = args.fixed_tl
+    # skip_tl_sync if AI controls TL or if we want SUMO default fixed timers
+    skip_tl       = use_ai or fixed_tl
 
     # Check TraCI availability
     traci_ok = False
@@ -488,12 +502,26 @@ def main():
         try:
             sumo_ctrl = HybridTwinController(
                 SUMO_CFG, port=traci_port, fps=fps,
-                skip_frames=SKIP_FRAMES, tripinfo_output=tripinfo_out
+                skip_frames=SKIP_FRAMES, tripinfo_output=tripinfo_out,
+                skip_tl_sync=skip_tl
             )
         except Exception as exc:
             print(f"[!] SUMO failed to start: {exc}")
             print("    -> Continuing in video-only mode.")
             print("    -> Install SUMO with:  sudo apt install sumo sumo-tools")
+
+    # ── Optional: AI Traffic Controller ───────────────────────────────────────
+    ai_ctrl = None
+    if use_ai and sumo_ctrl:
+        try:
+            import traci as traci_mod
+            from ai_controller import AITrafficController
+            ai_ctrl = AITrafficController(traci_mod, checkpoint=ai_checkpoint,
+                                          step_length=SKIP_FRAMES / fps)
+            print("[+] AI Traffic Controller active (MAPPO + Safety + Preemption)")
+        except Exception as exc:
+            print(f"[!] AI Controller failed to load: {exc}")
+            print("    -> Falling back to heuristic TL sync.")
 
     # Precompute tripwire pixel positions for overlay drawing
     tw_top    = int(height * TRIPWIRE_MARGIN)
@@ -573,12 +601,16 @@ def main():
         # ── PHASE 3: Hybrid TraCI sync ────────────────────────────────────────
         if sumo_ctrl:
             if not frame0_done:
-                # Rule 1 — Frame-0 snapshot: spawn everything visible right now
+                # Rule 1 -- Frame-0 snapshot: spawn everything visible right now
                 sumo_ctrl.init_frame0(detections)
                 frame0_done = True
             else:
-                # Rules 2, 3, 4 — tripwire + TL sync + autonomous driving
+                # Rules 2, 3, 4 -- tripwire + TL sync + autonomous driving
                 sumo_ctrl.tick(detections, width, height)
+
+            # AI controller overrides heuristic TL sync each step
+            if ai_ctrl:
+                ai_ctrl.step()
 
         # ── HUD overlays ──────────────────────────────────────────────────────
         # Draw homography anchor points (red crosses)
@@ -596,11 +628,20 @@ def main():
         if sumo_ctrl:
             tl_str      = sumo_ctrl.tl_phase()
             ws          = sumo_ctrl.get_wait_stats()
-            mode_text   = "HYBRID [Frame0 + Tripwire + TL-Sync + Wait-Time]"
-            sumo_counts = (f"Tracked: {len(detections)}  |  "
-                           f"SUMO active: {sumo_ctrl.active_count()}  |  "
-                           f"Spawned: {sumo_ctrl.spawned_count()}  |  "
-                           f"TL: {tl_str}")
+
+            if ai_ctrl:
+                ai_stats    = ai_ctrl.get_stats()
+                mode_text   = "AI [MAPPO + Safety + Preemption]"
+                sumo_counts = (f"Tracked: {len(detections)}  |  "
+                               f"SUMO active: {sumo_ctrl.active_count()}  |  "
+                               f"Phase: {ai_stats['current_phase']}({ai_stats['state']})  |  "
+                               f"Switches: {ai_stats['phase_switches']}")
+            else:
+                mode_text   = "HYBRID [Frame0 + Tripwire + TL-Sync + Wait-Time]"
+                sumo_counts = (f"Tracked: {len(detections)}  |  "
+                               f"SUMO active: {sumo_ctrl.active_count()}  |  "
+                               f"Spawned: {sumo_ctrl.spawned_count()}  |  "
+                               f"TL: {tl_str}")
             wait_line   = (f"Wait: N={ws['north']:.0f}s  "
                            f"S={ws['south']:.0f}s  "
                            f"E={ws['east']:.0f}s  "
