@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Traffic Control - Digital Twin Dashboard</title>
+    <meta name="description" content="Compare traffic control algorithms using a digital twin simulation powered by YOLOv8 and SUMO.">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+
+        <!-- ── HEADER ──────────────────────────────────────────────────── -->
+        <header class="header">
+            <h1>AI-Powered Traffic Control</h1>
+            <p>Digital Twin Dashboard &mdash; Upload a video to compare algorithms</p>
+        </header>
+
+        <!-- ── UPLOAD SECTION ──────────────────────────────────────────── -->
+        <section id="upload-section" class="upload-section glass-card">
+            <div id="upload-area" class="upload-area">
+                <div class="upload-icon">&#128249;</div>
+                <h3>Drop your intersection video here</h3>
+                <p>or click to browse &mdash; .mp4 files only</p>
+                <div id="file-name" class="file-name"></div>
+            </div>
+            <input type="file" id="file-input" accept=".mp4">
+            <button id="btn-test" class="btn-test" disabled>
+                &#9654; Test Algorithm
+            </button>
+        </section>
+
+        <!-- ── LOADING ─────────────────────────────────────────────────── -->
+        <section id="loading-section" class="loading-section glass-card">
+            <div class="spinner"></div>
+            <h3>Running Simulations<span class="loading-dots"></span></h3>
+            <p>Two SUMO instances + YOLO detection are running on your machine.</p>
+            <p style="margin-top: 8px; color: var(--accent-cyan);">Check your taskbar for the 3 local windows.</p>
+        </section>
+
+        <!-- ── DASHBOARD ───────────────────────────────────────────────── -->
+        <div id="dashboard" class="dashboard">
+
+            <p class="section-title">Wait-Time Comparison</p>
+
+            <!-- Side-by-side instance cards -->
+            <div class="comparison-grid">
+
+                <!-- Instance A -->
+                <div class="glass-card instance-card card-a">
+                    <div class="instance-label">Instance A</div>
+                    <div class="instance-name">AI Traffic Control</div>
+                    <div class="stat-row">
+                        <span class="stat-label">Avg Wait (All Vehicles)</span>
+                        <span class="stat-value"><span id="a-wait-all">--</span><span class="stat-unit">s</span></span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Avg Wait (Ambulances)</span>
+                        <span class="stat-value"><span id="a-wait-ambulance">--</span><span class="stat-unit">s</span></span>
+                    </div>
+                </div>
+
+                <!-- Instance B -->
+                <div class="glass-card instance-card card-b">
+                    <div class="instance-label">Instance B</div>
+                    <div class="instance-name">Baseline</div>
+                    <div class="stat-row">
+                        <span class="stat-label">Avg Wait (All Vehicles)</span>
+                        <span class="stat-value"><span id="b-wait-all">--</span><span class="stat-unit">s</span></span>
+                    </div>
+                    <div class="stat-row">
+                        <span class="stat-label">Avg Wait (Ambulances)</span>
+                        <span class="stat-value"><span id="b-wait-ambulance">--</span><span class="stat-unit">s</span></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Massive percentage stats -->
+            <p class="section-title">Improvement Metrics</p>
+
+            <div class="reduction-grid">
+                <div class="glass-card reduction-card">
+                    <div class="reduction-label">Overall Traffic Wait Time Reduction</div>
+                    <div id="overall-reduction" class="reduction-value neutral">--%</div>
+                    <div class="reduction-subtitle">Instance A vs Instance B</div>
+                </div>
+                <div class="glass-card reduction-card ambulance-card">
+                    <div class="reduction-label">Ambulance Wait Time Reduction</div>
+                    <div id="ambulance-reduction" class="reduction-value neutral">--%</div>
+                    <div class="reduction-subtitle">Emergency vehicle priority</div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

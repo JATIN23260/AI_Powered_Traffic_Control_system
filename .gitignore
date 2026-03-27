@@ -1,6 +1,9 @@
-crossroad.mp4
-Antigravity.exe
-yolov8l.pt
-yolov8m.pt
-yolov8n.pt
-yolov8s.pt
+models/
+videos/
+uploads/
+summary_A.json
+summary_B.json
+tripinfo_A.xml
+tripinfo_B.xml
+tripinfo_ai.xml
+tripinfo_baseline.xml

@@ -3,11 +3,11 @@ import torch
 from ultralytics import YOLO
 
 # 1. Setup Model & GPU
-model = YOLO('yolov8l.pt') # 'l' (large) - higher accuracy model
+model = YOLO('./models/yolov8n.pt') # 'l' (large) - higher accuracy model
 if torch.cuda.is_available():
     model.to('cuda')
 
-cap = cv2.VideoCapture('crossroad.mp4')
+cap = cv2.VideoCapture('./videos/video1.mp4')
 
 width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))

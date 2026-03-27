@@ -19,17 +19,37 @@ import sys
 import os
 import subprocess
 import time
+import argparse
+import json
+
+# ── Windows Per-Monitor DPI awareness (prevents blurry window on 125%/150% displays) ──
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # 2 = Per-Monitor DPI aware
+    except Exception:
+        pass  # older Windows versions may not support this
 
 from ultralytics import YOLO
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
-VIDEO_PATH      = "crossroad.mp4"
-MODEL_PATH      = "yolov8l.pt"
+VIDEO_PATH      = "./videos/video3.mp4"
+MODEL_PATH      = "./models/yolov8n.pt"
 SUMO_CFG        = "my_config.sumocfg"
 TRACI_PORT      = 8813
 VEHICLE_TYPE    = "standard_car"
-DETECT_CLASSES  = [2, 3, 5, 7]   # COCO: car, motorcycle, bus, truck
+DETECT_CLASSES  = [1, 2, 3, 5, 7]   # COCO: car, motorcycle, bus, truck
 SKIP_FRAMES     = 2               # process every Nth frame
+PROCESS_SCALE    = 0.5              # resize factor for YOLO inference (↓ = faster, 1.0 = full res)
+DISPLAY_SCALE    = 0.3             # resize factor for the display window (↓ = smaller window)
+
+# ── HYBRID TWIN CONFIG ────────────────────────────────────────────────────────
+TRIPWIRE_MARGIN   = 0.10            # fraction from each edge that acts as entry tripwire
+TL_JUNCTION_ID    = "J25"           # SUMO junction / TL node id at the intersection
+TL_PHASE_NS_GREEN = 0               # SUMO phase index where North-South has green
+TL_PHASE_EW_GREEN = 2               # SUMO phase index where East-West has green
+STOP_PX_THRESHOLD = 5.0             # px/frame below which a vehicle is considered stopped
+STOP_MIN_VEHICLES = 1               # min stopped vehicles on an arm to infer red light
 
 # ── HOMOGRAPHY CALIBRATION POINTS ─────────────────────────────────────────────
 # Map 4 known pixel positions  →  their corresponding SUMO (x, y) coordinates.
@@ -40,10 +60,10 @@ SKIP_FRAMES     = 2               # process every Nth frame
 # Run `python3 digital_twin.py --calibrate`  to click your own exact values.
 
 PIXEL_PTS = np.float32([
-    [  60, 370],   # West  road end  → J24
-    [ 640,  35],   # North road end  → J26
-    [1220, 360],   # East  road end  → J27
-    [ 640, 685],   # South road end  → J28
+    [3, 591],
+    [966, 6],
+    [1914, 750],
+    [236, 1076],
 ])
 
 SUMO_PTS = np.float32([
@@ -85,7 +105,8 @@ class HomographyMapper:
 #   East  zone  → vehicles travelling on edge E18  (J27 → J25)
 #   Center zone → intersection box  (use N-S road as fallback)
 
-ZONE_MARGIN = 0.28   # outer fraction of frame considered a "road arm" zone
+ZONE_MARGIN = 0.40   # outer fraction of frame considered a "road arm" zone
+                     # raise this if camera is angled (not perfectly top-down)
 
 # Maps zone name → (traci_route_id,  [ordered edges for that route])
 ZONE_ROUTE: dict = {
@@ -116,45 +137,52 @@ def detect_zone(cx: int, cy: int, width: int, height: int) -> str:
     return "center"
 
 
-# ── PHASE 3: TRACI TWIN CONTROLLER ───────────────────────────────────────────
-class SumoTwinController:
+# ── PHASE 3: HYBRID TRACI TWIN CONTROLLER ────────────────────────────────────
+class HybridTwinController:
     """
-    Manages digital-twin vehicles in a live SUMO simulation via TraCI.
+    Hybrid Autonomous Digital Twin Controller.
 
-    Spawn-only mode
-    ---------------
-    • When a vehicle is first detected in the video (including every vehicle
-      visible at the very first processed frame), it is spawned once in SUMO
-      on the road-arm edge that matches its pixel zone.
-    • After spawning, the SUMO vehicle drives **autonomously** — no coordinate
-      mirroring (moveToXY) is performed at any point.
-    • When the video tracker loses a vehicle the matching SUMO twin is removed
-      so the simulation stays clean.
-    • A track_id that re-appears (tracker re-assigns the same id) is NOT
-      re-spawned because it is remembered in _ever_seen.
+    Spawn strategy
+    --------------
+    • Frame-0 snapshot  : All vehicles visible on the very first processed frame
+      are spawned immediately in SUMO (Rule 1).
+    • Edge tripwires    : Any new track_id whose centroid falls within
+      TRIPWIRE_MARGIN of a frame edge triggers a spawn, because the vehicle
+      is entering the scene from outside (Rule 3).
+    • No continuous coordinate mirroring — vehicles drive autonomously under
+      SUMO's car-following model after their initial spawn (Rule 4).
+
+    Traffic-light sync (Rule 2)
+    ---------------------------
+    Per-arm movement is estimated each frame. If ≥ STOP_MIN_VEHICLES vehicles
+    on an arm all have speed < STOP_PX_THRESHOLD px/frame, that arm is declared
+    "stopped" (inferred red). The SUMO TL phase is set to give green to the
+    opposing moving arm and held until the next sync event.
     """
 
-    def __init__(self, cfg_path: str, port: int = TRACI_PORT):
+    def __init__(self, cfg_path: str, port: int = TRACI_PORT,
+                 fps: float = 30.0, skip_frames: int = SKIP_FRAMES,
+                 tripinfo_output: str = ""):
         import traci
         self._traci = traci
 
-        # Pick sumo-gui if available, otherwise headless sumo
         binary = "sumo-gui" if self._binary_exists("sumo-gui") else "sumo"
         cmd = [
-            binary,
-            "-c", cfg_path,
+            binary, "-c", cfg_path,
             "--remote-port", str(port),
-            "--start",                    # start simulation immediately
-            "--quit-on-end", "false",     # keep SUMO open after video ends
-            "--no-step-log",              # quieter console output
+            "--start",
+            "--quit-on-end", "false",
+            "--no-step-log",
         ]
+        if tripinfo_output:
+            cmd += ["--tripinfo-output", tripinfo_output]
         self._proc = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
-        time.sleep(2.0)   # give SUMO time to bind the port
+        time.sleep(2.0)
         traci.init(port)
 
-        # Pre-create one route per road arm so twins spawn on the correct edge
+        # Pre-create one route per road arm
         seen_routes: set = set()
         for route_id, edges in ZONE_ROUTE.values():
             if route_id not in seen_routes:
@@ -164,76 +192,177 @@ class SumoTwinController:
                     pass
                 seen_routes.add(route_id)
 
-        self._active: dict[int, str] = {}  # track_id → SUMO vehicle id (currently in sim)
-        self._ever_seen: set[int]    = set()  # all track_ids ever spawned (no re-spawn)
-        self._step = 0
+        self._active: dict[int, str]   = {}   # track_id → SUMO vehicle id
+        self._ever_seen: set[int]      = set() # never re-spawn the same id
+        self._prev_centroids: dict[int, tuple] = {}  # for speed estimation
+        self._tl_phase: str            = "unknown"   # last inferred TL state
+        self._step                     = 0
+
+        # Wait-time tracking
+        self._spf: float               = skip_frames / fps  # seconds per processed frame
+        self._wait_frames: dict[int, int] = {}   # track_id → consecutive stopped frames
+        self._zone_by_tid: dict[int, str] = {}   # track_id → current zone
+
         print(f"[✓] SUMO started ({binary}) on port {port}")
-        print("[✓] Spawn-only mode: vehicles drive autonomously after initial spawn")
+        print("[✓] Hybrid mode: Frame-0 snapshot + edge tripwires + TL sync")
 
     @staticmethod
     def _binary_exists(name: str) -> bool:
-        return subprocess.run(
-            ["which", name], capture_output=True
-        ).returncode == 0
+        return subprocess.run(["where" if sys.platform == "win32" else "which", name],
+                              capture_output=True).returncode == 0
 
-    def tick(self, detections: list, mapper: HomographyMapper):
+    # ── Shared spawn helper ───────────────────────────────────────────────────
+    def _spawn(self, tid: int, zone: str):
+        """Spawn a SUMO twin once; silently no-ops if already spawned."""
+        if tid in self._ever_seen:
+            return
+        self._ever_seen.add(tid)
+        vid      = f"twin_{tid}"
+        route_id, _ = ZONE_ROUTE.get(zone, ZONE_ROUTE["center"])
+        try:
+            self._traci.vehicle.add(
+                vid, route_id,
+                typeID=VEHICLE_TYPE,
+                departLane="best",
+                departPos="base",
+                departSpeed="max",
+            )
+            self._active[tid] = vid
+            print(f"  [+] Spawned twin_{tid} on {route_id}  (zone: {zone})")
+        except Exception as exc:
+            print(f"  [!] Could not spawn twin_{tid}: {exc}")
+
+    # ── Rule 1: Frame-0 snapshot ──────────────────────────────────────────────
+    def init_frame0(self, detections: list):
+        """Spawn every vehicle visible on the very first processed frame."""
+        print(f"[Frame-0] Snapshot: {len(detections)} vehicles detected — spawning all.")
+        for (tid, cx, cy, zone) in detections:
+            self._spawn(tid, zone)
+            self._prev_centroids[tid] = (cx, cy)
+            self._wait_frames[tid]    = 0
+            self._zone_by_tid[tid]    = zone
+        self._traci.simulationStep()
+        self._step += 1
+
+    # ── Rule 3: Edge tripwire check ───────────────────────────────────────────
+    def _is_tripwire_entry(self, cx: int, cy: int, width: int, height: int) -> bool:
+        """True if the centroid is inside the border tripwire margin zone."""
+        rx, ry = cx / width, cy / height
+        return (
+            ry < TRIPWIRE_MARGIN
+            or ry > 1.0 - TRIPWIRE_MARGIN
+            or rx < TRIPWIRE_MARGIN
+            or rx > 1.0 - TRIPWIRE_MARGIN
+        )
+
+    # ── Rule 2: Traffic-light synchronisation ────────────────────────────────
+    def _sync_traffic_light(self, arm_speeds: dict):
         """
-        Called once per processed video frame.
+        Infer real-world TL state from per-arm vehicle speeds and mirror in SUMO.
+        arm_speeds: {zone_name: [speed_px_per_frame, ...]}
+        """
+        def arm_stopped(arm: str) -> bool:
+            speeds  = arm_speeds.get(arm, [])
+            stopped = sum(1 for s in speeds if s < STOP_PX_THRESHOLD)
+            return stopped >= STOP_MIN_VEHICLES
+
+        ns_stopped = arm_stopped("north") or arm_stopped("south")
+        ew_stopped = arm_stopped("east")  or arm_stopped("west")
+
+        if   ns_stopped and not ew_stopped:
+            desired = "EW_GREEN"   # NS queuing → give EW the green
+        elif ew_stopped and not ns_stopped:
+            desired = "NS_GREEN"   # EW queuing → give NS the green
+        else:
+            return   # ambiguous — leave TL as-is
+
+        if desired == self._tl_phase:
+            return   # already correct, no TraCI call needed
+
+        self._tl_phase = desired
+        phase_idx = TL_PHASE_NS_GREEN if desired == "NS_GREEN" else TL_PHASE_EW_GREEN
+        try:
+            self._traci.trafficlight.setPhase(TL_JUNCTION_ID, phase_idx)
+            self._traci.trafficlight.setPhaseDuration(TL_JUNCTION_ID, 9999)
+            print(f"  [TL] ▶ {desired}  (phase index {phase_idx})")
+        except Exception:
+            pass   # TL node may not exist in all networks — fail gracefully
+
+    # ── Per-frame tick (Rules 2, 3, 4) ───────────────────────────────────────
+    def tick(self, detections: list, width: int, height: int):
+        """
+        Called once per processed video frame (after frame-0).
         detections: [(track_id, cx_pixel, cy_pixel, zone), ...]
-          zone: one of 'north','south','east','west','center'
-
-        Behaviour:
-          - First time a track_id is seen → spawn a SUMO twin (one-time only).
-          - Already-spawned vehicles → do nothing (autonomous SUMO driving).
-          - Disappeared tracks → remove from SUMO.
         """
-        traci = self._traci
-        seen_ids: set[int] = set()
+        traci    = self._traci
+        seen_ids: set[int]       = set()
+        arm_speeds: dict         = {z: [] for z in ZONE_ROUTE}
 
         for (tid, cx, cy, zone) in detections:
-            vid      = f"twin_{tid}"
-            route_id, _ = ZONE_ROUTE[zone]
             seen_ids.add(tid)
+            self._zone_by_tid[tid] = zone
 
-            # ── Spawn once, the very first time this track_id appears ──────────
+            # Rule 3 — tripwire spawn for genuinely new vehicles at the edge
             if tid not in self._ever_seen:
-                self._ever_seen.add(tid)
-                try:
-                    traci.vehicle.add(
-                        vid, route_id,
-                        typeID=VEHICLE_TYPE,
-                        departLane="best",
-                        departPos="base",
-                        departSpeed="0",
-                    )
-                    self._active[tid] = vid
-                    print(f"  [+] Spawned twin_{tid} on route {route_id} (zone: {zone})")
-                except Exception as exc:
-                    # Vehicle may already exist (e.g. SUMO pre-loaded it) — ignore
-                    print(f"  [!] Could not spawn twin_{tid}: {exc}")
+                if self._is_tripwire_entry(cx, cy, width, height):
+                    self._spawn(tid, zone)
 
-            # NOTE: No moveToXY — SUMO vehicle drives autonomously from here.
+            # Rule 2 — accumulate per-arm speeds for TL inference
+            speed = 0.0
+            if tid in self._prev_centroids:
+                px, py = self._prev_centroids[tid]
+                speed  = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
+                arm_speeds[zone].append(speed)
 
-        # ── Remove twins for tracks that have disappeared from the video ───────
+            self._prev_centroids[tid] = (cx, cy)
+
+            # Wait-time tracking
+            if speed < STOP_PX_THRESHOLD:
+                self._wait_frames[tid] = self._wait_frames.get(tid, 0) + 1
+            else:
+                self._wait_frames[tid] = 0
+
+        # Rule 2 — sync SUMO traffic light
+        self._sync_traffic_light(arm_speeds)
+
+        # Rule 4 — remove SUMO twins for tracks that left the video
         gone = set(self._active.keys()) - seen_ids
         for tid in gone:
             vid = self._active.pop(tid)
             try:
                 traci.vehicle.remove(vid)
-                print(f"  [-] Removed twin_{tid} (no longer in video)")
+                print(f"  [-] Removed twin_{tid}")
             except Exception:
-                pass   # already gone in SUMO
+                pass
+            self._prev_centroids.pop(tid, None)
+            self._wait_frames.pop(tid, None)
+            self._zone_by_tid.pop(tid, None)
 
         traci.simulationStep()
         self._step += 1
 
     def spawned_count(self) -> int:
-        """Total number of unique vehicles ever spawned in this session."""
         return len(self._ever_seen)
 
     def active_count(self) -> int:
-        """Number of SUMO twins currently in the simulation."""
         return len(self._active)
+
+    def tl_phase(self) -> str:
+        return self._tl_phase
+
+    def get_wait_stats(self) -> dict:
+        """
+        Returns max wait time in seconds per arm, plus overall max.
+        Keys: 'north', 'south', 'east', 'west', 'max'
+        """
+        arm_waits: dict[str, list] = {a: [] for a in ("north", "south", "east", "west")}
+        for tid, frames in self._wait_frames.items():
+            zone = self._zone_by_tid.get(tid, "center")
+            if zone in arm_waits:
+                arm_waits[zone].append(frames * self._spf)
+        result = {arm: (max(waits) if waits else 0.0) for arm, waits in arm_waits.items()}
+        result["max"] = max(result.values()) if result else 0.0
+        return result
 
     def close(self):
         try:
@@ -270,7 +399,7 @@ def run_calibration(video_path: str):
             cv2.putText(canvas, labels[len(pts) - 1].split("→")[0].strip(),
                         (x + 10, y - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            cv2.imshow("Calibration — click 4 road ends", canvas)
+            cv2.imshow("Calibration - click 4 road ends", canvas)
             print(f"  Registered: {labels[len(pts)-1]}  →  pixel ({x}, {y})")
             if len(pts) == 4:
                 print("\n[✓] Copy these PIXEL_PTS into digital_twin.py:\n")
@@ -285,20 +414,37 @@ def run_calibration(video_path: str):
         print(" ", l)
     print("\nPress Q to exit.\n")
 
-    cv2.imshow("Calibration — click 4 road ends", canvas)
-    cv2.setMouseCallback("Calibration — click 4 road ends", on_click)
+    cv2.namedWindow("Calibration - click 4 road ends", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Calibration - click 4 road ends", 1280, 720)  # explicit size so window is visible
+    cv2.imshow("Calibration - click 4 road ends", canvas)
+    cv2.waitKey(1)   # pump the event loop so Windows creates the actual HWND
+    cv2.setMouseCallback("Calibration - click 4 road ends", on_click)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
-    do_calibrate = "--calibrate" in sys.argv
-    no_sumo      = "--no-sumo"   in sys.argv
+    parser = argparse.ArgumentParser(description="Hybrid Autonomous Digital Twin")
+    parser.add_argument("--video",        default=VIDEO_PATH,  help="Path to input video")
+    parser.add_argument("--port",         type=int, default=TRACI_PORT, help="TraCI port for SUMO")
+    parser.add_argument("--tripinfo",     default="", help="Path for SUMO tripinfo XML output")
+    parser.add_argument("--window-title", default="Digital Twin - Hybrid Mode", help="OpenCV window title")
+    parser.add_argument("--summary-json", default="", help="Path to write summary JSON at exit")
+    parser.add_argument("--no-sumo",      action="store_true", help="Video-only mode (no SUMO)")
+    parser.add_argument("--calibrate",    action="store_true", help="Homography calibration mode")
+    args = parser.parse_args()
 
-    if do_calibrate:
-        run_calibration(VIDEO_PATH)
+    if args.calibrate:
+        run_calibration(args.video)
         return
+
+    video_path   = args.video
+    traci_port   = args.port
+    tripinfo_out = args.tripinfo
+    win_title    = args.window_title
+    summary_path = args.summary_json
+    no_sumo      = args.no_sumo
 
     # Check TraCI availability
     traci_ok = False
@@ -321,29 +467,51 @@ def main():
         print("[!] CUDA unavailable — running on CPU (slower)")
 
     # ── Open video ───────────────────────────────────────────────────────────
-    cap    = cv2.VideoCapture(VIDEO_PATH)
+    cap    = cv2.VideoCapture(video_path)
     width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps    = cap.get(cv2.CAP_PROP_FPS)
     print(f"[*] Video: {width}x{height}  @{fps:.1f} fps")
 
+    # Compute reduced inference resolution
+    proc_w = int(width  * PROCESS_SCALE)
+    proc_h = int(height * PROCESS_SCALE)
+    print(f"[*] Inference resolution: {proc_w}x{proc_h}  (scale={PROCESS_SCALE})")
+
     # ── Phase 2: build Homography ────────────────────────────────────────────
     mapper = HomographyMapper(PIXEL_PTS, SUMO_PTS)
     print("[✓] Homography matrix computed")
 
-    # ── Phase 3: start SUMO TraCI ────────────────────────────────────────────
+    # ── Phase 3: start SUMO (HybridTwinController) ───────────────────────────
     sumo_ctrl = None
     if use_sumo:
         try:
-            sumo_ctrl = SumoTwinController(SUMO_CFG, port=TRACI_PORT)
+            sumo_ctrl = HybridTwinController(
+                SUMO_CFG, port=traci_port, fps=fps,
+                skip_frames=SKIP_FRAMES, tripinfo_output=tripinfo_out
+            )
         except Exception as exc:
             print(f"[!] SUMO failed to start: {exc}")
-            print("    → Continuing in video-only mode.")
-            print("    → Install SUMO with:  sudo apt install sumo sumo-tools")
+            print("    -> Continuing in video-only mode.")
+            print("    -> Install SUMO with:  sudo apt install sumo sumo-tools")
+
+    # Precompute tripwire pixel positions for overlay drawing
+    tw_top    = int(height * TRIPWIRE_MARGIN)
+    tw_bottom = int(height * (1 - TRIPWIRE_MARGIN))
+    tw_left   = int(width  * TRIPWIRE_MARGIN)
+    tw_right  = int(width  * (1 - TRIPWIRE_MARGIN))
 
     # ── Main loop ────────────────────────────────────────────────────────────
-    frame_count = 0
-    print("\n[*] Pipeline running — press Q to quit.\n")
+    frame_count   = 0
+    frame0_done   = False   # Rule 1: have we done the frame-0 snapshot yet?
+    print("\n[*] Hybrid pipeline running — press Q to quit.\n")
+
+    # Pre-create the display window so it reliably appears on Windows
+    win_w = int(width  * DISPLAY_SCALE)
+    win_h = int(height * DISPLAY_SCALE)
+    cv2.namedWindow(win_title, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(win_title, win_w, win_h)
+    cv2.waitKey(1)
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -355,11 +523,12 @@ def main():
             continue
 
         # ── PHASE 1: Detection & Tracking ────────────────────────────────────
+        proc_frame = cv2.resize(frame, (proc_w, proc_h))
         results = model.track(
-            frame,
+            proc_frame,
             persist=True,
             conf=0.25,
-            imgsz=max(width, height),
+            imgsz=max(proc_w, proc_h),
             classes=DETECT_CLASSES,
             verbose=False,
         )
@@ -367,7 +536,7 @@ def main():
         detections = []   # [(track_id, cx, cy, zone), ...]
 
         if results[0].boxes.id is not None:
-            boxes     = results[0].boxes.xyxy.cpu().numpy()
+            boxes     = results[0].boxes.xyxy.cpu().numpy() / PROCESS_SCALE
             track_ids = results[0].boxes.id.int().cpu().numpy()
             classes   = results[0].boxes.cls.int().cpu().numpy()
             cls_names = results[0].names
@@ -383,7 +552,6 @@ def main():
                 sx, sy = mapper.pixel_to_sumo(cx, cy)
                 label  = f"#{tid} {cls_names[cls_id]} ({sx:.0f},{sy:.0f}) [{zone[0].upper()}]"
 
-                # Colour bounding box by zone
                 zone_colours = {
                     "north": (0, 200, 255),
                     "south": (0, 100, 255),
@@ -402,9 +570,15 @@ def main():
                             cv2.FONT_HERSHEY_SIMPLEX, 0.42,
                             (0, 255, 255), 1)
 
-        # ── PHASE 3: TraCI sync ───────────────────────────────────────────────
+        # ── PHASE 3: Hybrid TraCI sync ────────────────────────────────────────
         if sumo_ctrl:
-            sumo_ctrl.tick(detections, mapper)
+            if not frame0_done:
+                # Rule 1 — Frame-0 snapshot: spawn everything visible right now
+                sumo_ctrl.init_frame0(detections)
+                frame0_done = True
+            else:
+                # Rules 2, 3, 4 — tripwire + TL sync + autonomous driving
+                sumo_ctrl.tick(detections, width, height)
 
         # ── HUD overlays ──────────────────────────────────────────────────────
         # Draw homography anchor points (red crosses)
@@ -412,24 +586,59 @@ def main():
             cv2.drawMarker(frame, (px, py), (0, 0, 255),
                            cv2.MARKER_CROSS, 22, 2)
 
-        if sumo_ctrl:
-            mode_text   = "PHASE 1+2+3 [SUMO SPAWN-ONLY]"
-            sumo_counts = f"Tracked: {len(detections)}  |  SUMO active: {sumo_ctrl.active_count()}  |  Ever spawned: {sumo_ctrl.spawned_count()}"
-        else:
-            mode_text   = "PHASE 1+2 [VIDEO ONLY]"
-            sumo_counts = f"Tracked: {len(detections)} vehicles"
-        cv2.rectangle(frame, (0, 0), (620, 50), (0, 0, 0), -1)
-        cv2.putText(frame, mode_text,  (8, 22),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 0), 2)
-        cv2.putText(frame, sumo_counts, (8, 44),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.48, (200, 200, 200), 1)
+        # Draw 4 cyan tripwire lines near frame edges (Rule 3 visual)
+        tw_colour = (255, 255, 0)   # cyan
+        cv2.line(frame, (0, tw_top),    (width, tw_top),    tw_colour, 1)  # North
+        cv2.line(frame, (0, tw_bottom), (width, tw_bottom), tw_colour, 1)  # South
+        cv2.line(frame, (tw_left,  0),  (tw_left,  height), tw_colour, 1)  # West
+        cv2.line(frame, (tw_right, 0),  (tw_right, height), tw_colour, 1)  # East
 
-        cv2.imshow("Digital Twin Pipeline", frame)
+        if sumo_ctrl:
+            tl_str      = sumo_ctrl.tl_phase()
+            ws          = sumo_ctrl.get_wait_stats()
+            mode_text   = "HYBRID [Frame0 + Tripwire + TL-Sync + Wait-Time]"
+            sumo_counts = (f"Tracked: {len(detections)}  |  "
+                           f"SUMO active: {sumo_ctrl.active_count()}  |  "
+                           f"Spawned: {sumo_ctrl.spawned_count()}  |  "
+                           f"TL: {tl_str}")
+            wait_line   = (f"Wait: N={ws['north']:.0f}s  "
+                           f"S={ws['south']:.0f}s  "
+                           f"E={ws['east']:.0f}s  "
+                           f"W={ws['west']:.0f}s  "
+                           f"| Max={ws['max']:.0f}s")
+        else:
+            mode_text   = "PHASE 1+2 [VIDEO ONLY — no SUMO]"
+            sumo_counts = f"Tracked: {len(detections)} vehicles"
+            wait_line   = ""
+
+        cv2.rectangle(frame, (0, 0), (width, 72), (0, 0, 0), -1)
+        cv2.putText(frame, mode_text,  (8, 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.60, (0, 255, 0), 2)
+        cv2.putText(frame, sumo_counts, (8, 42),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, (200, 200, 200), 1)
+        cv2.putText(frame, wait_line,  (8, 64),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 220, 255), 1)
+
+        display_frame = cv2.resize(frame, (int(width * DISPLAY_SCALE), int(height * DISPLAY_SCALE)))
+        cv2.imshow(win_title, display_frame)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     # ── Cleanup ───────────────────────────────────────────────────────────────
     cap.release()
+
+    # Write summary JSON if requested
+    if summary_path and sumo_ctrl:
+        ws = sumo_ctrl.get_wait_stats()
+        summary = {
+            "frames_processed": frame_count // SKIP_FRAMES,
+            "total_spawned":    sumo_ctrl.spawned_count(),
+            "wait_stats":       ws,
+        }
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        print(f"[✓] Summary written to {summary_path}")
+
     if sumo_ctrl:
         sumo_ctrl.close()
     cv2.destroyAllWindows()
