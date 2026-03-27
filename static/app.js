@@ -332,12 +332,23 @@ function setReduction(id, pct) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//  4) HISTORICAL ANALYTICS — LINE CHART
-// ═══════════════════════════════════════════════════════════════════════════
+// =============================================================================
+//  4) HISTORICAL ANALYTICS -- LINE CHART
+// =============================================================================
 const chartCtx = document.getElementById('perf-chart');
 let perfChart = null;
 
 if (chartCtx) {
+    const ctx2d = chartCtx.getContext('2d');
+    const gradBlue = ctx2d.createLinearGradient(0, 0, 0, 280);
+    gradBlue.addColorStop(0,  'rgba(37,99,235,.18)');
+    gradBlue.addColorStop(.6, 'rgba(37,99,235,.06)');
+    gradBlue.addColorStop(1,  'rgba(37,99,235,0)');
+    const gradCyan = ctx2d.createLinearGradient(0, 0, 0, 280);
+    gradCyan.addColorStop(0,  'rgba(8,145,178,.14)');
+    gradCyan.addColorStop(.6, 'rgba(8,145,178,.04)');
+    gradCyan.addColorStop(1,  'rgba(8,145,178,0)');
+
     perfChart = new Chart(chartCtx, {
         type: 'line',
         data: {
@@ -346,28 +357,36 @@ if (chartCtx) {
                 {
                     label: 'Overall Traffic Wait (s)',
                     data: [50, 38.7, 28.3],
-                    borderColor: '#3b82f6',
-                    backgroundColor: 'rgba(59,130,246,.12)',
-                    borderWidth: 3,
-                    tension: 0.3,
+                    borderColor: '#2563eb',
+                    backgroundColor: gradBlue,
+                    borderWidth: 2.5,
+                    tension: 0.42,
                     fill: true,
-                    pointRadius: 6,
-                    pointBackgroundColor: '#3b82f6',
-                    pointBorderColor: '#0a0e17',
-                    pointBorderWidth: 2,
+                    pointRadius: 5,
+                    pointHoverRadius: 8,
+                    pointBackgroundColor: '#ffffff',
+                    pointBorderColor: '#2563eb',
+                    pointBorderWidth: 2.5,
+                    pointHoverBackgroundColor: '#2563eb',
+                    pointHoverBorderColor: '#ffffff',
+                    pointHoverBorderWidth: 2,
                 },
                 {
                     label: 'Ambulance Wait (s)',
                     data: [80, 45.1, 12.6],
-                    borderColor: '#06b6d4',
-                    backgroundColor: 'rgba(6,182,212,.08)',
-                    borderWidth: 3,
-                    tension: 0.3,
+                    borderColor: '#0891b2',
+                    backgroundColor: gradCyan,
+                    borderWidth: 2.5,
+                    tension: 0.42,
                     fill: true,
-                    pointRadius: 6,
-                    pointBackgroundColor: '#06b6d4',
-                    pointBorderColor: '#0a0e17',
-                    pointBorderWidth: 2,
+                    pointRadius: 5,
+                    pointHoverRadius: 8,
+                    pointBackgroundColor: '#ffffff',
+                    pointBorderColor: '#0891b2',
+                    pointBorderWidth: 2.5,
+                    pointHoverBackgroundColor: '#0891b2',
+                    pointHoverBorderColor: '#ffffff',
+                    pointHoverBorderWidth: 2,
                 },
             ],
         },
@@ -375,36 +394,50 @@ if (chartCtx) {
             responsive: true,
             maintainAspectRatio: false,
             interaction: { mode: 'index', intersect: false },
+            animation: { duration: 700, easing: 'easeInOutQuart' },
             plugins: {
                 legend: {
-                    labels: { color: '#475569', font: { family: "'Inter', sans-serif", size: 12 }, padding: 20 },
+                    position: 'top', align: 'end',
+                    labels: {
+                        color: '#3d5077',
+                        font: { family: "'Inter', sans-serif", size: 12, weight: '500' },
+                        padding: 24,
+                        usePointStyle: true,
+                        pointStyleWidth: 10,
+                    },
                 },
                 tooltip: {
                     backgroundColor: '#ffffff',
-                    borderColor: '#e2e8f0',
+                    borderColor: 'rgba(99,120,155,.15)',
                     borderWidth: 1,
-                    titleColor: '#0f172a',
-                    bodyColor: '#475569',
-                    padding: 12,
-                    cornerRadius: 8,
+                    titleColor: '#0f1c35',
+                    bodyColor: '#3d5077',
+                    padding: { top: 12, right: 16, bottom: 12, left: 16 },
+                    cornerRadius: 12,
+                    titleFont: { family: "'Inter', sans-serif", size: 13, weight: '700' },
+                    bodyFont: { family: "'Inter', sans-serif", size: 12 },
+                    callbacks: { label: ctx => ' ' + ctx.dataset.label + ': ' + ctx.parsed.y + 's' },
                 },
             },
             scales: {
                 x: {
-                    title: { display: true, text: 'Algorithm Version', color: '#94a3b8', font: { size: 12 } },
-                    ticks: { color: '#475569' },
-                    grid:  { color: '#e2e8f0' },
+                    title: { display: true, text: 'Algorithm Version', color: '#7b8fab', font: { family: "'Inter', sans-serif", size: 11, weight: '600' }, padding: { top: 8 } },
+                    ticks: { color: '#3d5077', font: { family: "'JetBrains Mono', monospace", size: 11 } },
+                    grid: { display: false },
+                    border: { display: false },
                 },
                 y: {
-                    title: { display: true, text: 'Wait Time (Seconds)', color: '#94a3b8', font: { size: 12 } },
-                    ticks: { color: '#475569' },
-                    grid:  { color: '#e2e8f0' },
+                    title: { display: true, text: 'Wait Time (s)', color: '#7b8fab', font: { family: "'Inter', sans-serif", size: 11, weight: '600' }, padding: { right: 8 } },
+                    ticks: { color: '#3d5077', font: { family: "'JetBrains Mono', monospace", size: 11 }, callback: v => v + 's', maxTicksLimit: 6 },
+                    grid: { color: 'rgba(99,120,155,.08)' },
+                    border: { display: false },
                     beginAtZero: true,
                 },
             },
         },
     });
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  5) DEPLOY TO EDGE FLEET
