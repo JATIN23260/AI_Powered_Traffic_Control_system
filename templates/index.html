@@ -3,97 +3,262 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI Traffic Control - Digital Twin Dashboard</title>
-    <meta name="description" content="Compare traffic control algorithms using a digital twin simulation powered by YOLOv8 and SUMO.">
+    <title>Smart City Traffic Control Center</title>
+    <meta name="description" content="AI-powered Smart City Traffic Control Center for monitoring hardware fleet and managing algorithm deployments.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
-    <div class="container">
 
-        <!-- ── HEADER ──────────────────────────────────────────────────── -->
-        <header class="header">
-            <h1>AI-Powered Traffic Control</h1>
-            <p>Digital Twin Dashboard &mdash; Upload a video to compare algorithms</p>
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     SIDEBAR
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+        <div class="brand-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+        </div>
+        <div class="brand-text">
+            <span class="brand-name">CityTraffic</span>
+            <span class="brand-sub">Control Center</span>
+        </div>
+    </div>
+
+    <nav class="sidebar-nav">
+        <button class="nav-tab active" id="tab-fleet" data-view="fleet">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            <span>Live Fleet</span>
+            <small>Hardware</small>
+        </button>
+        <button class="nav-tab" id="tab-lab" data-view="lab">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18"/></svg>
+            <span>Algorithm Lab</span>
+            <small>Software &amp; MLOps</small>
+        </button>
+    </nav>
+
+    <div class="sidebar-footer">
+        <div class="system-status">
+            <div class="status-dot online"></div>
+            <span>System Online</span>
+        </div>
+        <small class="sidebar-version">v2.1.0 — Edge Fleet</small>
+    </div>
+</aside>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     MAIN CONTENT
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<main class="main-content">
+
+    <!-- ── LIVE FLEET VIEW ──────────────────────────────────────────────── -->
+    <section class="view" id="view-fleet">
+        <header class="view-header">
+            <div>
+                <h1>Live Fleet Monitor</h1>
+                <p class="view-subtitle">Real-time intersection camera &amp; signal health</p>
+            </div>
+            <div class="header-stats">
+                <div class="stat-chip online-chip">
+                    <div class="status-dot online"></div>
+                    <span id="stat-online">22</span> Online
+                </div>
+                <div class="stat-chip offline-chip">
+                    <div class="status-dot offline"></div>
+                    <span id="stat-offline">3</span> Offline
+                </div>
+                <div class="stat-chip pending-chip">
+                    <div class="status-dot pending"></div>
+                    <span id="stat-pending">0</span> Pending
+                </div>
+            </div>
         </header>
 
-        <!-- ── UPLOAD SECTION ──────────────────────────────────────────── -->
-        <section id="upload-section" class="upload-section glass-card">
-            <div id="upload-area" class="upload-area">
-                <div class="upload-icon">&#128249;</div>
-                <h3>Drop your intersection video here</h3>
-                <p>or click to browse &mdash; .mp4 files only</p>
-                <div id="file-name" class="file-name"></div>
-            </div>
-            <input type="file" id="file-input" accept=".mp4">
-            <button id="btn-test" class="btn-test" disabled>
-                &#9654; Test Algorithm
-            </button>
-        </section>
+        <div class="fleet-container">
+            <!-- Map View -->
+            <div id="fleet-map"></div>
 
-        <!-- ── LOADING ─────────────────────────────────────────────────── -->
-        <section id="loading-section" class="loading-section glass-card">
-            <div class="spinner"></div>
-            <h3>Running Simulations<span class="loading-dots"></span></h3>
-            <p>Two SUMO instances + YOLO detection are running on your machine.</p>
-            <p style="margin-top: 8px; color: var(--accent-cyan);">Check your taskbar for the 3 local windows.</p>
-        </section>
-
-        <!-- ── DASHBOARD ───────────────────────────────────────────────── -->
-        <div id="dashboard" class="dashboard">
-
-            <p class="section-title">Wait-Time Comparison</p>
-
-            <!-- Side-by-side instance cards -->
-            <div class="comparison-grid">
-
-                <!-- Instance A -->
-                <div class="glass-card instance-card card-a">
-                    <div class="instance-label">Instance A</div>
-                    <div class="instance-name">AI Traffic Control</div>
-                    <div class="stat-row">
-                        <span class="stat-label">Avg Wait (All Vehicles)</span>
-                        <span class="stat-value"><span id="a-wait-all">--</span><span class="stat-unit">s</span></span>
-                    </div>
-                    <div class="stat-row">
-                        <span class="stat-label">Avg Wait (Ambulances)</span>
-                        <span class="stat-value"><span id="a-wait-ambulance">--</span><span class="stat-unit">s</span></span>
-                    </div>
+            <!-- Detail Side Panel -->
+            <div class="detail-panel" id="detail-panel">
+                <div class="panel-header">
+                    <h3 id="panel-title">Node Details</h3>
+                    <button class="panel-close" id="panel-close">&times;</button>
                 </div>
-
-                <!-- Instance B -->
-                <div class="glass-card instance-card card-b">
-                    <div class="instance-label">Instance B</div>
-                    <div class="instance-name">Baseline</div>
-                    <div class="stat-row">
-                        <span class="stat-label">Avg Wait (All Vehicles)</span>
-                        <span class="stat-value"><span id="b-wait-all">--</span><span class="stat-unit">s</span></span>
+                <div class="panel-body">
+                    <div class="panel-alert" id="panel-alert">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                        <span>Camera Signal Lost</span>
                     </div>
-                    <div class="stat-row">
-                        <span class="stat-label">Avg Wait (Ambulances)</span>
-                        <span class="stat-value"><span id="b-wait-ambulance">--</span><span class="stat-unit">s</span></span>
+                    <div class="panel-details">
+                        <div class="detail-row">
+                            <span class="detail-label">Intersection ID</span>
+                            <span class="detail-value" id="panel-node-id">—</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Error Code</span>
+                            <span class="detail-value error-code" id="panel-error">502</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Uptime (last)</span>
+                            <span class="detail-value" id="panel-uptime">14d 6h 32m</span>
+                        </div>
+                        <div class="detail-row">
+                            <span class="detail-label">Status</span>
+                            <span class="detail-value" id="panel-status">Offline</span>
+                        </div>
                     </div>
+                    <button class="btn-dispatch" id="btn-dispatch">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                        Dispatch Technician
+                    </button>
                 </div>
             </div>
+        </div>
+    </section>
 
-            <!-- Massive percentage stats -->
-            <p class="section-title">Improvement Metrics</p>
-
-            <div class="reduction-grid">
-                <div class="glass-card reduction-card">
-                    <div class="reduction-label">Overall Traffic Wait Time Reduction</div>
-                    <div id="overall-reduction" class="reduction-value neutral">--%</div>
-                    <div class="reduction-subtitle">Instance A vs Instance B</div>
+    <!-- ── ALGORITHM LAB VIEW ───────────────────────────────────────────── -->
+    <section class="view hidden" id="view-lab">
+        <header class="view-header">
+            <div>
+                <h1>Algorithm Lab</h1>
+                <p class="view-subtitle">RL model testing, analytics &amp; OTA deployment</p>
+            </div>
+            <div class="header-stats">
+                <div class="stat-chip online-chip">
+                    <div class="status-dot online"></div>
+                    Live Version: <strong>V1.1</strong>
                 </div>
-                <div class="glass-card reduction-card ambulance-card">
-                    <div class="reduction-label">Ambulance Wait Time Reduction</div>
-                    <div id="ambulance-reduction" class="reduction-value neutral">--%</div>
-                    <div class="reduction-subtitle">Emergency vehicle priority</div>
+            </div>
+        </header>
+
+        <!-- Testing Engine -->
+        <div class="lab-section">
+            <h2 class="section-title">Testing Engine</h2>
+            <div class="test-card" id="test-card">
+                <div class="upload-area" id="lab-upload-area">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <p>Drop drone feed (.mp4) or click to browse</p>
+                    <span class="file-name" id="lab-file-name">No file selected</span>
+                </div>
+                <input type="file" id="lab-file-input" accept=".mp4" hidden>
+                <button class="btn-test" id="btn-lab-test" disabled>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                    Upload Drone Feed &amp; Test
+                </button>
+            </div>
+
+            <!-- Loading overlay for test -->
+            <div class="test-loading hidden" id="test-loading">
+                <div class="spinner"></div>
+                <p>Running SUMO simulations — AI vs Baseline…</p>
+                <small>This may take a few minutes</small>
+            </div>
+
+            <!-- Results (hidden until test completes) -->
+            <div class="test-results hidden" id="test-results">
+                <div class="results-grid">
+                    <div class="result-card instance-a">
+                        <div class="card-label">Instance A</div>
+                        <h3>AI Traffic Control</h3>
+                        <div class="metric-row"><span>Avg Wait (All)</span><strong><span id="r-a-all">—</span><small>s</small></strong></div>
+                        <div class="metric-row"><span>Avg Wait (Ambulance)</span><strong><span id="r-a-amb">—</span><small>s</small></strong></div>
+                    </div>
+                    <div class="result-card instance-b">
+                        <div class="card-label">Instance B</div>
+                        <h3>Baseline (Fixed Timer)</h3>
+                        <div class="metric-row"><span>Avg Wait (All)</span><strong><span id="r-b-all">—</span><small>s</small></strong></div>
+                        <div class="metric-row"><span>Avg Wait (Ambulance)</span><strong><span id="r-b-amb">—</span><small>s</small></strong></div>
+                    </div>
+                </div>
+                <div class="reduction-grid">
+                    <div class="reduction-card">
+                        <span class="reduction-label">Overall Wait Reduction</span>
+                        <span class="reduction-value" id="overall-reduction">—</span>
+                    </div>
+                    <div class="reduction-card">
+                        <span class="reduction-label">Ambulance Wait Reduction</span>
+                        <span class="reduction-value" id="ambulance-reduction">—</span>
+                    </div>
                 </div>
             </div>
         </div>
 
-    </div>
+        <!-- Historical Analytics -->
+        <div class="lab-section">
+            <h2 class="section-title">Historical Analytics</h2>
+            <div class="chart-container">
+                <canvas id="perf-chart"></canvas>
+            </div>
+        </div>
 
-    <script src="/static/app.js"></script>
+        <!-- Run Ledger / Version History -->
+        <div class="lab-section">
+            <h2 class="section-title">Version History — Run Ledger</h2>
+            <div class="table-wrap">
+                <table class="version-table" id="version-table">
+                    <thead>
+                        <tr>
+                            <th>Version</th>
+                            <th>Date</th>
+                            <th>Avg Wait (All)</th>
+                            <th>Avg Wait (Ambulance)</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="version-tag">V1.0</span></td>
+                            <td>2026-01-15</td>
+                            <td>50.2 s</td>
+                            <td>80.4 s</td>
+                            <td><span class="badge badge-archived">Archived</span></td>
+                            <td>—</td>
+                        </tr>
+                        <tr>
+                            <td><span class="version-tag">V1.1</span></td>
+                            <td>2026-02-28</td>
+                            <td>38.7 s</td>
+                            <td>45.1 s</td>
+                            <td><span class="badge badge-live">Live</span></td>
+                            <td>—</td>
+                        </tr>
+                        <tr class="best-row">
+                            <td><span class="version-tag best">V2.0</span></td>
+                            <td>2026-03-27</td>
+                            <td>28.3 s</td>
+                            <td>12.6 s</td>
+                            <td><span class="badge badge-ready">Ready</span></td>
+                            <td><button class="btn-deploy" id="btn-deploy">Deploy to Edge Fleet</button></td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+</main>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+     DEPLOY MODAL OVERLAY
+     ═══════════════════════════════════════════════════════════════════════════ -->
+<div class="deploy-overlay hidden" id="deploy-overlay">
+    <div class="deploy-modal">
+        <div class="deploy-icon" id="deploy-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </div>
+        <h2 id="deploy-title">Pushing OTA Update to Edge Containers…</h2>
+        <p id="deploy-sub">Deploying V2.0 across 25 intersection nodes</p>
+        <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="deploy-progress"></div>
+        </div>
+        <span class="progress-pct" id="deploy-pct">0%</span>
+    </div>
+</div>
+
+<script src="/static/app.js"></script>
 </body>
 </html>
